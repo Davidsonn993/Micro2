@@ -1,107 +1,129 @@
-
-#define F_CPU 8000000UL  // 8 MHz
+#define F_CPU 16500000UL
 #include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdlib.h>
 #include <util/delay.h>
 
-#include <stdlib.h>  // Para generar números aleatorios
+// Definición de estados
+#define ESTADO_INICIO 0
+#define ESTADO_PARPADEO 1
+#define ESTADO_SECUENCIA 2
+#define ESTADO_LECTURA 3
 
-// Definir pines de LEDs y botones
-#define LED0 PB0
-#define LED1 PB1
-#define LED2 PB2
-#define LED3 PB3
-#define BTN0 PB4
-#define BTN1 PB5
-#define BTN2 PB6
-#define BTN3 PB7
+volatile uint8_t estado = ESTADO_INICIO;
+volatile uint8_t secuencia[4];       // Secuencia generada aleatoriamente
+volatile uint8_t secuencia_usuario[4]; // Secuencia ingresada por el usuario
+volatile uint8_t numparpa = 5;       // Número de parpadeos, valor inicial 5
+volatile uint8_t indice_lectura = 0; // Índice para la secuencia del usuario
 
-// Función para hacer parpadear todos los LEDs
-void parpadeo_todos_leds(int veces, uint16_t delay_ms) {
-    for (int i = 0; i < veces; i++) {
-        PORTB |= (1 << LED0) | (1 << LED1) | (1 << LED2) | (1 << LED3);
-        for (uint16_t j = 0; j < delay_ms; j++) _delay_ms(1);  // Bucle para retraso variable
-        PORTB &= ~((1 << LED0) | (1 << LED1) | (1 << LED2) | (1 << LED3));
-        for (uint16_t j = 0; j < delay_ms; j++) _delay_ms(1);  // Bucle para retraso variable
+void inicializar() {
+    // Configuración de pines
+    DDRB = 0x0F;   // PB0, PB1, PB2 y PB3 como salida (LEDs)
+    DDRD &= ~(0x0F); // PD0 a PD3 como entradas (botones)
+    PORTD |= 0x0F; // Activar pull-up en PD0 a PD3
+
+    // Configuración de temporizador
+    TCCR0A = (1 << WGM01); // Modo CTC
+    TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler 1024
+    OCR0A = 156; // Valor de comparación para 10ms con prescaler 1024
+    TIMSK = (1 << OCIE0A); // Habilitar interrupción por comparación
+    
+    // Habilitar interrupciones globales
+    sei();
+}
+
+void generar_secuencia() {
+    for (int i = 0; i < 4; i++) {
+        secuencia[i] = rand() % 4; // Generar número aleatorio entre 0 y 3
     }
 }
 
-// Función para encender un LED
-void encender_led(uint8_t led, uint16_t delay_ms) {
-    PORTB |= (1 << led);
-    for (uint16_t i = 0; i < delay_ms; i++) _delay_ms(1);  // Bucle para retraso variable
-    PORTB &= ~(1 << led);
+void parpadear_leds_simultaneo() {
+    for (uint8_t i = 0; i < numparpa; i++) { // Parpadear según valor de numparpa
+        PORTB = 0x0F; // Encender todos los LEDs
+        _delay_ms(500); // Esperar
+        PORTB = 0x00; // Apagar todos los LEDs
+        _delay_ms(500); // Esperar
+    }
 }
 
-
-// Función para leer el estado de un botón
-uint8_t leer_boton(uint8_t boton) {
-    return PINB & (1 << boton);
+void mostrar_secuencia() {
+    for (int i = 0; i < 4; i++) {
+        PORTB = (1 << secuencia[i]); // Encender el LED correspondiente
+        _delay_ms(500); // Esperar
+        PORTB = 0x00; // Apagar LEDs
+        _delay_ms(250); // Esperar
+    }
 }
 
+uint8_t leer_boton() {
+    if (!(PIND & (1 << PD0))) return 0;
+    if (!(PIND & (1 << PD1))) return 1;
+    if (!(PIND & (1 << PD2))) return 2;
+    if (!(PIND & (1 << PD3))) return 3;
+    return 255; // Ningún botón presionado
+}
 
+void leer_secuencia_usuario() {
+    uint8_t boton = leer_boton();
+    if (boton != 255 && indice_lectura < 4) {
+        secuencia_usuario[indice_lectura] = boton;
+        indice_lectura++;
+        _delay_ms(300); // Delay para evitar rebotes
+    }
+}
+
+ISR(TIMER0_COMPA_vect) {
+    if (estado == ESTADO_PARPADEO) {
+        parpadear_leds_simultaneo();
+        estado = ESTADO_SECUENCIA;
+    }
+}
+
+int boton_presionado() {
+    // Retorna 1 si alguno de los botones PD0 a PD3 es presionado
+    if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
+        _delay_ms(50); // Debounce
+        if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
+            return 1; // Botón presionado
+        }
+    }
+    return 0; // Ningún botón presionado
+}
 
 int main(void) {
-    // Configurar LEDs como salida
-    DDRB |= (1 << LED0) | (1 << LED1) | (1 << LED2) | (1 << LED3);
-
-    // Configurar botones como entrada (sin pull-up)
-    DDRB &= ~((1 << BTN0) | (1 << BTN1) | (1 << BTN2) | (1 << BTN3));
-    PORTB &= ~((1 << BTN0) | (1 << BTN1) | (1 << BTN2) | (1 << BTN3));  // Sin pull-up
-
-    int secuencia[10];  // Para almacenar la secuencia del juego
-    int nivel = 4;  // Comienza con una secuencia de 4 LEDs
-    int tiempo_encendido = 2000;  // 2000 ms (2 segundos) inicialmente
-
-    // Esperar a que se presione un botón para iniciar el juego
-    while (leer_boton(BTN0) == 0 && leer_boton(BTN1) == 0 && leer_boton(BTN2) == 0 && leer_boton(BTN3) == 0);
-
-    // Parpadeo inicial para indicar que el juego ha comenzado
-    parpadeo_todos_leds(2, 500);
-
-
-
-    // Ciclo infinito para controlar los LEDs
+    inicializar();
+    
     while (1) {
-        // Generar secuencia aleatoria
-        for (int i = 0; i < nivel; i++) {
-            secuencia[i] = rand() % 4;  // Generar un número aleatorio entre 0 y 3
-        }
+        switch (estado) {
+            case ESTADO_INICIO:
+                if (boton_presionado()) {
+                    while (boton_presionado()); // Esperar a que se suelte el botón
+                    estado = ESTADO_PARPADEO;
+                    generar_secuencia();
+                }
+                break;
 
-        // Mostrar la secuencia al jugador
-        for (int i = 0; i < nivel; i++) {
-            encender_led(secuencia[i], tiempo_encendido);  // Encender LED con retardo variable
-            _delay_ms(500);  // Pausa entre LEDs
-        }	   
-	   
-	   
-	   
-	   
-	 // Leer el estado de los botones en PB4, PB5, PB6, PB7
-        if (PINB & (1 << PB4)) {  // Si el botón en PB4 está presionado
-            PORTB |= (1 << PB0);  // Encender LED en PB0
-        } else {
-            PORTB &= ~(1 << PB0);  // Apagar LED en PB0
-        }
+            case ESTADO_PARPADEO:
+                // El parpadeo se maneja en la interrupción TIMER0_COMPA_vect
+                break;
 
-        if (PINB & (1 << PB5)) {  // Si el botón en PB5 está presionado
-            PORTB |= (1 << PB1);  // Encender LED en PB1
-        } else {
-            PORTB &= ~(1 << PB1);  // Apagar LED en PB1
-        }
+            case ESTADO_SECUENCIA:
+                mostrar_secuencia();
+                estado = ESTADO_LECTURA; // Cambiar al estado de lectura de la secuencia
+                indice_lectura = 0; // Reiniciar el índice de lectura
+                break;
 
-        if (PINB & (1 << PB6)) {  // Si el botón en PB6 está presionado
-            PORTB |= (1 << PB2);  // Encender LED en PB2
-        } else {
-            PORTB &= ~(1 << PB2);  // Apagar LED en PB2
-        }
+            case ESTADO_LECTURA:
+                leer_secuencia_usuario(); // Leer la secuencia ingresada por el usuario
+                if (indice_lectura >= 4) {
+                    estado = ESTADO_INICIO; // Volver al estado inicial cuando se ingresan los 4 valores
+                }
+                break;
 
-        if (PINB & (1 << PB7)) {  // Si el botón en PB7 está presionado
-            PORTB |= (1 << PB3);  // Encender LED en PB3
-        } else {
-            PORTB &= ~(1 << PB3);  // Apagar LED en PB3
+            default:
+                estado = ESTADO_INICIO;
+                break;
         }
-
-        _delay_ms(50);  // Pequeño retardo para evitar rebotes mecánicos de los botones
     }
 }
-

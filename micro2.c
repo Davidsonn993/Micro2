@@ -2,23 +2,38 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <stdlib.h>
-#include <util/delay.h>
+#include <util/delay.h> // Para _delay_ms()
+
+// Prototipos de funciones
+void parpadear_leds_simultaneo(void);
+void generar_secuencia(void);
+void mostrar_secuencia(void);
+void leer_secuencia(void);
+void comparar_secuencias(void);
+void manejar_exito(void);
+void manejar_error(void);
+int boton_presionado(void);
 
 // Definición de estados
 #define ESTADO_INICIO 0
 #define ESTADO_PARPADEO 1
 #define ESTADO_SECUENCIA 2
 #define ESTADO_LECTURA 3
+#define ESTADO_EXITO 4
+#define ESTADO_ERROR 5
 
 volatile uint8_t estado = ESTADO_INICIO;
-volatile uint8_t secuencia[4];       // Secuencia generada aleatoriamente
-volatile uint8_t secuencia_usuario[4]; // Secuencia ingresada por el usuario
-volatile uint8_t numparpa = 5;       // Número de parpadeos, valor inicial 5
-volatile uint8_t indice_lectura = 0; // Índice para la secuencia del usuario
+volatile uint8_t secuencia[8];
+volatile uint8_t lectura[8];
+volatile uint8_t longitudSecuencia = 4;
+volatile uint16_t tiempoLedEncendido = 2000; // 2 segundos al inicio
+
+volatile uint16_t temporizadorLeds = 0; // Tiempo para encender los LEDs
+volatile uint8_t parpadeo = 0; // Flag para controlar el parpadeo de LEDs
 
 void inicializar() {
     // Configuración de pines
-    DDRB = 0x0F;   // PB0, PB1, PB2 y PB3 como salida (LEDs)
+    DDRB = 0x0F; // PB0, PB1, PB2 y PB3 como salida (LEDs)
     DDRD &= ~(0x0F); // PD0 a PD3 como entradas (botones)
     PORTD |= 0x0F; // Activar pull-up en PD0 a PD3
 
@@ -27,61 +42,96 @@ void inicializar() {
     TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler 1024
     OCR0A = 156; // Valor de comparación para 10ms con prescaler 1024
     TIMSK = (1 << OCIE0A); // Habilitar interrupción por comparación
-    
+
     // Habilitar interrupciones globales
     sei();
 }
 
 void generar_secuencia() {
-    for (int i = 0; i < 4; i++) {
-        secuencia[i] = rand() % 4; // Generar número aleatorio entre 0 y 3
+    for (uint8_t i = 0; i < longitudSecuencia; i++) {
+        secuencia[i] = rand() % 4;
     }
 }
 
-void parpadear_leds_simultaneo() {
-    for (uint8_t i = 0; i < numparpa; i++) { // Parpadear según valor de numparpa
+void mostrar_secuencia() {
+    for (uint8_t i = 0; i < longitudSecuencia; i++) {
+        PORTB = (1 << secuencia[i]); // Encender el LED correspondiente
+        temporizadorLeds = tiempoLedEncendido / 10; // Tiempo de encendido en 10 ms
+        parpadeo = 1; // Activar parpadeo
+        
+        // Esperar el tiempo de encendido
+        while (temporizadorLeds > 0); 
+        
+        PORTB = 0x00; // Apagar LEDs
+        
+        temporizadorLeds = 250 / 10; // Tiempo de espera entre LEDs en 10 ms
+        parpadeo = 1; // Activar parpadeo
+        
+        // Esperar el tiempo de espera entre LEDs
+        while (temporizadorLeds > 0); 
+    }
+}
+
+void leer_secuencia() {
+    for (uint8_t i = 0; i < longitudSecuencia; i++) {
+        while (!boton_presionado()); // Esperar a que se presione un botón
+
+        for (uint8_t j = 0; j < 4; j++) {
+            if (!(PIND & (1 << j))) {
+                lectura[i] = j;
+                break;
+            }
+        }
+
+        _delay_ms(200); // Debounce
+    }
+}
+
+void comparar_secuencias() {
+    for (uint8_t i = 0; i < longitudSecuencia; i++) {
+        if (lectura[i] != secuencia[i]) {
+            estado = ESTADO_ERROR;
+            return;
+        }
+    }
+    estado = ESTADO_EXITO;
+}
+
+void manejar_exito() {
+    for (uint8_t i = 0; i < 2; i++) {
         PORTB = 0x0F; // Encender todos los LEDs
         _delay_ms(500); // Esperar
         PORTB = 0x00; // Apagar todos los LEDs
         _delay_ms(500); // Esperar
     }
+
+    if (longitudSecuencia < 8) {
+        longitudSecuencia++;
+        if (tiempoLedEncendido > 200) {
+            tiempoLedEncendido -= 200;
+        }
+    }
 }
 
-void mostrar_secuencia() {
-    for (int i = 0; i < 4; i++) {
-        PORTB = (1 << secuencia[i]); // Encender el LED correspondiente
+void manejar_error() {
+    for (uint8_t i = 0; i < 3; i++) {
+        PORTB = 0x0F; // Encender todos los LEDs
         _delay_ms(500); // Esperar
-        PORTB = 0x00; // Apagar LEDs
-        _delay_ms(250); // Esperar
+        PORTB = 0x00; // Apagar todos los LEDs
+        _delay_ms(500); // Esperar
     }
-}
 
-uint8_t leer_boton() {
-    if (!(PIND & (1 << PD0))) return 0;
-    if (!(PIND & (1 << PD1))) return 1;
-    if (!(PIND & (1 << PD2))) return 2;
-    if (!(PIND & (1 << PD3))) return 3;
-    return 255; // Ningún botón presionado
-}
-
-void leer_secuencia_usuario() {
-    uint8_t boton = leer_boton();
-    if (boton != 255 && indice_lectura < 4) {
-        secuencia_usuario[indice_lectura] = boton;
-        indice_lectura++;
-        _delay_ms(300); // Delay para evitar rebotes
-    }
+    longitudSecuencia = 4;
+    tiempoLedEncendido = 2000; // Reiniciar tiempo de encendido a 2 segundos
 }
 
 ISR(TIMER0_COMPA_vect) {
-    if (estado == ESTADO_PARPADEO) {
-        parpadear_leds_simultaneo();
-        estado = ESTADO_SECUENCIA;
+    if (parpadeo && temporizadorLeds > 0) {
+        temporizadorLeds--; // Contar el tiempo en 10ms
     }
 }
 
 int boton_presionado() {
-    // Retorna 1 si alguno de los botones PD0 a PD3 es presionado
     if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
         _delay_ms(50); // Debounce
         if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
@@ -91,39 +141,64 @@ int boton_presionado() {
     return 0; // Ningún botón presionado
 }
 
+void parpadear_leds_simultaneo(void) {
+    // Función para parpadear LEDs simultáneamente
+    PORTB = 0x0F; // Encender todos los LEDs
+    _delay_ms(500); // Esperar
+    PORTB = 0x00; // Apagar todos los LEDs
+    _delay_ms(500); // Esperar
+    PORTB = 0x0F; // Encender todos los LEDs
+    _delay_ms(500); // Esperar
+    PORTB = 0x00; // Apagar todos los LEDs
+    _delay_ms(500); // Esperar
+}
+
+void maquina_estados() {
+    switch (estado) {
+        case ESTADO_INICIO:
+            if (boton_presionado()) {
+                while (boton_presionado()); // Esperar a que se suelte el botón
+                estado = ESTADO_PARPADEO;
+            }
+            break;
+
+        case ESTADO_PARPADEO:
+            parpadear_leds_simultaneo();
+            estado = ESTADO_SECUENCIA;
+            break;
+
+        case ESTADO_SECUENCIA:
+            generar_secuencia();
+            _delay_ms(1000); // Esperar antes de mostrar la secuencia
+            mostrar_secuencia();
+            estado = ESTADO_LECTURA;
+            break;
+
+        case ESTADO_LECTURA:
+            leer_secuencia();
+            comparar_secuencias();
+            break;
+
+        case ESTADO_EXITO:
+            manejar_exito();
+            estado = ESTADO_INICIO; // Volver al estado inicial
+            break;
+
+        case ESTADO_ERROR:
+            manejar_error();
+            estado = ESTADO_INICIO; // Volver al estado inicial
+            break;
+
+        default:
+            estado = ESTADO_INICIO; // En caso de estado desconocido
+            break;
+    }
+}
+
 int main(void) {
     inicializar();
-    
+
     while (1) {
-        switch (estado) {
-            case ESTADO_INICIO:
-                if (boton_presionado()) {
-                    while (boton_presionado()); // Esperar a que se suelte el botón
-                    estado = ESTADO_PARPADEO;
-                    generar_secuencia();
-                }
-                break;
-
-            case ESTADO_PARPADEO:
-                // El parpadeo se maneja en la interrupción TIMER0_COMPA_vect
-                break;
-
-            case ESTADO_SECUENCIA:
-                mostrar_secuencia();
-                estado = ESTADO_LECTURA; // Cambiar al estado de lectura de la secuencia
-                indice_lectura = 0; // Reiniciar el índice de lectura
-                break;
-
-            case ESTADO_LECTURA:
-                leer_secuencia_usuario(); // Leer la secuencia ingresada por el usuario
-                if (indice_lectura >= 4) {
-                    estado = ESTADO_INICIO; // Volver al estado inicial cuando se ingresan los 4 valores
-                }
-                break;
-
-            default:
-                estado = ESTADO_INICIO;
-                break;
-        }
+        maquina_estados(); // Controlar el flujo de la máquina de estados
     }
 }

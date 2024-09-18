@@ -1,8 +1,10 @@
-#define F_CPU 16500000UL
+#define F_CPU 8000000UL // Frecuencia ajustada a 8 MHz
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <stdlib.h>
 #include <util/delay.h> // Para _delay_ms()
+
+
 
 // Prototipos de funciones
 void parpadear_leds_simultaneo(void);
@@ -40,7 +42,7 @@ void inicializar() {
     // Configuración de temporizador
     TCCR0A = (1 << WGM01); // Modo CTC
     TCCR0B = (1 << CS02) | (1 << CS00); // Prescaler 1024
-    OCR0A = 156; // Valor de comparación para 10ms con prescaler 1024
+    OCR0A = 155; // Ajustado para 10ms con prescaler 1024 y 8 MHz
     TIMSK = (1 << OCIE0A); // Habilitar interrupción por comparación
 
     // Habilitar interrupciones globales
@@ -133,7 +135,7 @@ ISR(TIMER0_COMPA_vect) {
 
 int boton_presionado() {
     if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
-        _delay_ms(50); // Debounce
+        _delay_ms(100); // Debounce
         if (!(PIND & (1 << PD0)) || !(PIND & (1 << PD1)) || !(PIND & (1 << PD2)) || !(PIND & (1 << PD3))) {
             return 1; // Botón presionado
         }
@@ -142,15 +144,14 @@ int boton_presionado() {
 }
 
 void parpadear_leds_simultaneo(void) {
-    // Función para parpadear LEDs simultáneamente
     PORTB = 0x0F; // Encender todos los LEDs
-    _delay_ms(500); // Esperar
-    PORTB = 0x00; // Apagar todos los LEDs
-    _delay_ms(500); // Esperar
-    PORTB = 0x0F; // Encender todos los LEDs
-    _delay_ms(500); // Esperar
-    PORTB = 0x00; // Apagar todos los LEDs
-    _delay_ms(500); // Esperar
+    _delay_ms(1000);
+    PORTB = 0x00;
+    _delay_ms(1000);
+    PORTB = 0x0F;
+    _delay_ms(1000);
+    PORTB = 0x00;
+    _delay_ms(1000);
 }
 
 void maquina_estados() {
